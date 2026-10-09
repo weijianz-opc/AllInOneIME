@@ -174,6 +174,86 @@ public struct CustomCommand: Codable, Hashable, Sendable {
     }
 }
 
+extension CustomCommand {
+    /// What keeps a definition from being saved, for the settings' editor.
+    public enum Problem: Equatable, Sendable {
+        case emptyName
+        /// Only letters can be typed after "@" (digits pick from the command list).
+        case nameNotLetters
+        /// A built-in command, or another custom one, has this name.
+        case nameTaken
+        case emptyPrompt
+        case emptyCommand
+        /// A quote in the command line isn't closed.
+        case unbalancedQuote
+    }
+
+    /// The first problem with this definition among `others` (the other custom commands), or nil.
+    public func problem(among others: [CustomCommand]) -> Problem? {
+        let name = name.lowercased()
+        if name.isEmpty { return .emptyName }
+        if !name.allSatisfy({ $0.isASCII && $0.isLetter }) || name.count > 24 { return .nameNotLetters }
+        if Command.builtins.contains(where: { $0.name == name }) || others.contains(where: { $0.name.lowercased() == name }) {
+            return .nameTaken
+        }
+        switch type {
+        case .prompt:
+            if (prompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .emptyPrompt }
+        case .run, .terminal:
+            if (argv?.first ?? "").isEmpty { return .emptyCommand }
+        }
+        return nil
+    }
+
+    /// Arguments as one line, quoted where needed: ["python3", "-c", "{input}"] → `python3 -c {input}`.
+    public static func commandLine(_ argv: [String]) -> String {
+        argv.map { arg in
+            guard arg.isEmpty || arg.contains(where: { " \t\"'\\".contains($0) }) else { return arg }
+            return "\"" + arg.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        }.joined(separator: " ")
+    }
+
+    /// A command line split into arguments: spaces separate them, "…" and '…' quote, \ escapes the
+    /// next character. No other shell syntax: `;`, `|`, `$` are plain text. Nil if a quote isn't closed.
+    public static func arguments(fromCommandLine line: String) -> [String]? {
+        var args: [String] = []
+        var current = ""
+        var inArgument = false
+        var quote: Character?
+        var escaped = false
+        for c in line {
+            if escaped {
+                current.append(c)
+                escaped = false
+                continue
+            }
+            if c == "\\", quote != "'" {
+                escaped = true
+                inArgument = true
+                continue
+            }
+            if let q = quote {
+                if c == q { quote = nil } else { current.append(c) }
+                continue
+            }
+            if c == "\"" || c == "'" {
+                quote = c
+                inArgument = true
+            } else if c == " " || c == "\t" {
+                if inArgument { args.append(current) }
+                current = ""
+                inArgument = false
+            } else {
+                current.append(c)
+                inArgument = true
+            }
+        }
+        if quote != nil || escaped { return nil }
+        if inArgument { args.append(current) }
+        return args
+    }
+}
+
 /// A file, folder or app found for `@open`.
 public struct SearchResult: Equatable, Sendable {
     /// Shown in the panel ("Calculator", "报告.pdf").

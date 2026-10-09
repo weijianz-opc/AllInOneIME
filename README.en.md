@@ -58,9 +58,10 @@ first, as usual, before changing files or running commands. Without Claude Code 
 
 ### Your own commands
 
-Add `customCommands` to the config file (`~/.config/allinoneime/config.json`) for `@` commands of your own; they
-come after the built-in ones. Names are English letters only and can't be a built-in command's; saved changes apply
-from the next sentence.
+In the settings, under "Custom @ Commands", click "Add Command…": give it a name and choose what it does (an AI
+instruction, a program, or a program in Terminal), or start from an example. Your commands come after the built-in
+ones; names are English letters only and can't be a built-in command's; they work from the next sentence.
+They're kept in `customCommands` in the config file (`~/.config/allinoneime/config.json`), which you can also edit:
 
 ```json
 "customCommands": [

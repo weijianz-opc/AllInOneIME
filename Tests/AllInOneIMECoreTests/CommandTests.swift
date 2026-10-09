@@ -97,4 +97,30 @@ struct CommandTests {
     @Test func answersBecomeOneSafeLine() {
         #expect(Converter.oneLine("  First line.\nSecond\tline.\u{1B}[31m  ") == "First line. Second line. [31m")
     }
+
+    @Test func commandLines() {
+        typealias C = CustomCommand
+        #expect(C.arguments(fromCommandLine: "python3 -c {input}") == ["python3", "-c", "{input}"])
+        #expect(C.arguments(fromCommandLine: #"say -v "Ting-Ting" '{input}'  "#) == ["say", "-v", "Ting-Ting", "{input}"])
+        #expect(C.arguments(fromCommandLine: #"zsh -c "{input}; exec zsh""#) == ["zsh", "-c", "{input}; exec zsh"])
+        #expect(C.arguments(fromCommandLine: #"echo a\ b "" x"#) == ["echo", "a b", "", "x"])
+        #expect(C.arguments(fromCommandLine: #"echo "open"#) == nil)
+        #expect(C.arguments(fromCommandLine: "   ") == [])
+        // One line and back gives the same arguments.
+        for argv in [["python3", "-c", "{input}"], ["zsh", "-c", "{input}; exec zsh"], ["echo", #"say "hi" \ there"#, ""]] {
+            #expect(C.arguments(fromCommandLine: C.commandLine(argv)) == argv)
+        }
+        #expect(C.commandLine(["python3", "-c", "{input}"]) == "python3 -c {input}")
+    }
+
+    @Test func editorProblems() {
+        let ok = CustomCommand(name: "reply", type: .prompt, prompt: "Reply politely.")
+        #expect(ok.problem(among: []) == nil)
+        #expect(CustomCommand(name: "", type: .prompt, prompt: "x").problem(among: []) == .emptyName)
+        #expect(CustomCommand(name: "py3", type: .run, argv: ["python3"]).problem(among: []) == .nameNotLetters)
+        #expect(CustomCommand(name: "Open", type: .run, argv: ["x"]).problem(among: []) == .nameTaken)  // built-in
+        #expect(ok.problem(among: [CustomCommand(name: "Reply", type: .prompt, prompt: "y")]) == .nameTaken)
+        #expect(CustomCommand(name: "x", type: .prompt, prompt: "  ").problem(among: []) == .emptyPrompt)
+        #expect(CustomCommand(name: "x", type: .terminal, argv: []).problem(among: []) == .emptyCommand)
+    }
 }

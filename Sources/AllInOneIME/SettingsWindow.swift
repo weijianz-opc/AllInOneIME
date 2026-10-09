@@ -323,6 +323,9 @@ struct SettingsView: View {
     @ObservedObject var model: SettingsModel
     @State private var customModel = false
     @State private var customProviderModel = false
+    /// The custom command being added or edited (the editor sheet), and the one about to be deleted.
+    @State private var commandEdit: CommandEdit?
+    @State private var commandToDelete: Int?
     /// The API key being typed (a saved key is never shown again: it stays in the keychain).
     @State private var newKey = ""
 
@@ -413,6 +416,28 @@ struct SettingsView: View {
                      + (model.jargonExists ? tr("\n文件：", "\nFile: ") + model.jargonPath : ""))
                     .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             }
+
+            Section(tr("自定义 @ 命令", "Custom @ Commands")) {
+                ForEach(Array(model.config.customCommands.enumerated()), id: \.offset) { index, command in
+                    HStack {
+                        Text("@" + command.name).font(.body.monospaced())
+                        Text(UIText.customKind(command)).foregroundStyle(.secondary)
+                        if let summary = command.summary {
+                            Text(summary).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer()
+                        Button(tr("编辑", "Edit")) { commandEdit = CommandEdit(index: index, command: command) }
+                        Button(tr("删除", "Delete")) { commandToDelete = index }
+                    }
+                }
+                Button(tr("添加命令…", "Add Command…")) {
+                    commandEdit = CommandEdit(index: nil, command: CustomCommand(name: "", type: .prompt))
+                }
+                Text(tr("保存后，在任意输入框开头打 @ 加名字就能用，和 @improve 一样。",
+                        "Once saved, type @ and its name at the start of any text field, like @improve."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .disabled(!model.canSave)
 
             Section(tr("语音输入", "Voice Input")) {
                 Toggle(tr("按住右 ⌥ 说话，松开结束", "Hold right ⌥ to talk, release to stop"), isOn: $model.config.voiceInput)
@@ -505,6 +530,31 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(minWidth: 520, idealWidth: 560, minHeight: 360, idealHeight: 760)
         // Text fields save on Return; everything else (pickers, steppers, toggles) saves on change.
+        .sheet(item: $commandEdit) { edit in
+            CommandEditor(edit: edit, others: model.config.customCommands.enumerated()
+                            .filter { $0.offset != edit.index }.map(\.element)) { command in
+                if let index = edit.index {
+                    model.config.customCommands[index] = command
+                } else {
+                    model.config.customCommands.append(command)
+                }
+                model.save()
+            }
+        }
+        .confirmationDialog(tr("删除这个命令？", "Delete this command?"),
+                            isPresented: Binding(get: { commandToDelete != nil }, set: { if !$0 { commandToDelete = nil } })) {
+            Button(tr("删除", "Delete"), role: .destructive) {
+                if let index = commandToDelete, model.config.customCommands.indices.contains(index) {
+                    model.config.customCommands.remove(at: index)
+                    model.save()
+                }
+                commandToDelete = nil
+            }
+        } message: {
+            if let index = commandToDelete, model.config.customCommands.indices.contains(index) {
+                Text("@" + model.config.customCommands[index].name)
+            }
+        }
         .onChange(of: model.config.awsProfile) { model.save() }
         .onChange(of: model.config.provider) {
             customProviderModel = false

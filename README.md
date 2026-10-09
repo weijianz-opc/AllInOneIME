@@ -55,8 +55,9 @@ Claude Code（`claude` 命令）和它自己的账号，改文件、跑命令前
 
 ### 自己加命令
 
-在配置文件（`~/.config/allinoneime/config.json`）里加 `customCommands`，就能有自己的 `@` 命令，排在内置命令后面。
-命令名只能用英文字母，不能和内置命令重名；改完保存，下一句就生效。
+在设置的「自定义 @ 命令」里点「添加命令…」：起个名字，选它做什么（AI 指令、运行程序、在终端运行），也可以从例子开始。
+命令排在内置命令后面，名字只能用英文字母，不能和内置命令重名；保存后下一句就能用。
+它们存在配置文件（`~/.config/allinoneime/config.json`）的 `customCommands` 里，也可以直接改：
 
 ```json
 "customCommands": [
