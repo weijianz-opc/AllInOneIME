@@ -123,4 +123,44 @@ struct CommandTests {
         #expect(CustomCommand(name: "x", type: .prompt, prompt: "  ").problem(among: []) == .emptyPrompt)
         #expect(CustomCommand(name: "x", type: .terminal, argv: []).problem(among: []) == .emptyCommand)
     }
+
+    @Test func usageCountsOftenAndLately() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var usage = CommandUsage()
+        usage.record("calc", now: now)
+        usage.record("calc", now: now)
+        #expect(usage.score("calc", now: now) == 2)
+        #expect(abs(usage.score("calc", now: now + CommandUsage.halfLife) - 1) < 1e-9)  // halves in a week
+        #expect(usage.score("never", now: now) == 0)
+        // Long unused commands are forgotten when another is used.
+        usage.record("py", now: now + 60 * 86400)
+        #expect(usage.score("calc", now: now + 60 * 86400) == 0)
+        // Kept as JSON between launches.
+        let again = try? JSONDecoder().decode(CommandUsage.self, from: JSONEncoder().encode(usage))
+        #expect(again == usage)
+    }
+
+    @Test func paletteShowsFiveByUse() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let custom = ["calc", "sh", "reply", "python", "japanese"].map {
+            CustomCommand(name: $0, type: .run, argv: ["x"])
+        }
+        let catalog = Command.catalog(custom)  // 4 built-in + 5
+        // Nothing used yet: the first five in catalog order.
+        #expect(Command.palette("", in: catalog, usage: CommandUsage(), now: now).map(\.name)
+            == ["improve", "question", "claude", "open", "calc"])
+        // The most used first, the rest in catalog order.
+        var usage = CommandUsage()
+        for _ in 0..<3 { usage.record("python", now: now) }
+        usage.record("sh", now: now)
+        usage.record("japanese", now: now - 30 * 86400)  // long ago: less than sh today
+        #expect(Command.palette("", in: catalog, usage: usage, now: now).map(\.name)
+            == ["python", "sh", "japanese", "improve", "question"])
+        // Letters: names starting with them first, then names containing them; by use within each.
+        #expect(Command.palette("py", in: catalog, usage: usage, now: now).map(\.name) == ["python"])
+        #expect(Command.palette("p", in: catalog, usage: usage, now: now).map(\.name) == ["python", "japanese", "improve", "open", "reply"])
+        #expect(Command.palette("a", in: catalog, usage: usage, now: now).map(\.name) == ["japanese", "claude", "calc"])
+        #expect(Command.palette("o", in: catalog, usage: usage, now: now).map(\.name) == ["open", "python", "improve", "question"])
+        #expect(Command.palette("zz", in: catalog, usage: usage, now: now).isEmpty)
+    }
 }

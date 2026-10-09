@@ -69,6 +69,8 @@ public final class Composer {
         case launchInTerminal(argv: [String])
         /// Run a custom `run` command's program on `input`; what it prints arrives via `receive`.
         case startRun(Command, input: String, id: Int)
+        /// A command was run (`commandUsage` has it): keep the usage for the order of the command list.
+        case commandUsed(String)
         /// Put `text` on the clipboard (⌘C on a result).
         case copy(String)
         /// Read the clipboard's text for the draft (⌘V) and hand it to `pasted(_:id:)`, after the key
@@ -186,6 +188,9 @@ public final class Composer {
     public private(set) var activeCommand: Command?
     /// The commands "@" offers: the built-in ones and the user's (`Command.catalog`).
     public var commands: [Command] = Command.builtins
+    /// How much each command is used: the list shows the most used first (set by the controller,
+    /// shared by its text fields).
+    public var commandUsage = CommandUsage()
     /// Files and apps found for `@open`.
     public private(set) var searchResults: [SearchResult] = []
     /// Results for the `@open` text as it is typed (`liveQuery`), and the highlighted one.
@@ -365,7 +370,10 @@ public final class Composer {
     }
 
     /// Commands offered for `paletteQuery`, and the highlighted one.
-    public var paletteMatches: [Command] { paletteQuery.map { Command.matching($0, in: commands) } ?? [] }
+    /// At most `Command.paletteLimit`: the most used, or what matches the letters (`Command.palette`).
+    public var paletteMatches: [Command] {
+        paletteQuery.map { Command.palette($0, in: commands, usage: commandUsage) } ?? []
+    }
     public var paletteHighlighted: Int { min(paletteHighlight, max(paletteMatches.count - 1, 0)) }
 
     /// The `@open` text while it is typed, for results as you type (`receiveLive`).
@@ -838,7 +846,7 @@ public final class Composer {
     /// the app. Nil outside the palette.
     private func handlePaletteKey(_ event: KeyEvent) -> Response? {
         guard let query = paletteQuery else { return nil }
-        let matches = Command.matching(query, in: commands)
+        let matches = paletteMatches
         let plain = event.modifiers.subtracting([.capsLock, .shift]).isEmpty
         switch event.keyCode {
         case VirtualKey.tab where plain:
@@ -866,7 +874,7 @@ public final class Composer {
             break
         }
         if plain, let text = event.printableText, text.count == 1, let c = text.first, c.isASCII {
-            if c.isLetter, !Command.matching(query + text, in: commands).isEmpty {
+            if c.isLetter, !Command.palette(query + text, in: commands, usage: commandUsage).isEmpty {
                 draft += text
                 paletteHighlight = 0
                 return .consumed([.updateMarkedText, .showPanel])
@@ -1162,11 +1170,12 @@ public final class Composer {
                 return .consumed([.updateMarkedText, .notice(command.custom == nil ? messages.secureInputTerminal : messages.secureInputCommand)])
             }
             // The session runs in its own window: nothing to wait for or insert here.
+            let usage = used(command)
             if let custom = command.custom {
                 return .consumed(finish(committing: "") + [.launchInTerminal(argv: custom.arguments(for: input)),
-                                                           .notice(messages.ranInTerminal)])
+                                                           .notice(messages.ranInTerminal), usage])
             }
-            return .consumed(finish(committing: "") + [.runInTerminal(prompt: input), .notice(messages.openedTerminal)])
+            return .consumed(finish(committing: "") + [.runInTerminal(prompt: input), .notice(messages.openedTerminal), usage])
         }
         requestCounter += 1
         phase = .translating(id: requestCounter)
@@ -1181,7 +1190,13 @@ public final class Composer {
         case .open?: start = .search(query: input, id: requestCounter)
         default: start = .startConversion(input: input, id: requestCounter)
         }
-        return .consumed([start, .updateMarkedText, .showPanel])
+        return .consumed([start, .updateMarkedText, .showPanel] + (parsed.map { [used($0.command)] } ?? []))
+    }
+
+    /// Counts a run of `command` for the order of the command list.
+    private func used(_ command: Command) -> Effect {
+        commandUsage.record(command.name)
+        return .commandUsed(command.name)
     }
 
     // MARK: - Action key

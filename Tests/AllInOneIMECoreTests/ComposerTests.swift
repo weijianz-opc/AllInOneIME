@@ -1301,7 +1301,8 @@ struct ComposerTests {
         let (p, _) = composer(key: .optionTap)
         p.commands = catalog
         _ = p.handleKeyDown(at)
-        #expect(p.paletteMatches.map(\.name) == ["improve", "question", "claude", "open", "python", "reply", "sh"])
+        // At most five: the built-in four and the first custom one (nothing used yet).
+        #expect(p.paletteMatches.map(\.name) == ["improve", "question", "claude", "open", "python"])
         // @python: code is typed as letters, the program runs, and Chinese comes back after.
         let py = start("py")
         #expect(py.draft == "@python " && py.engineState.isAsciiMode)
@@ -1331,6 +1332,36 @@ struct ComposerTests {
         let python = CustomCommand(name: "python", type: .run, argv: ["python3", "-c", "{input}"])
         let reply = CustomCommand(name: "reply", type: .prompt, prompt: "Write a reply.")
         #expect(Command.catalog([python, reply]).map(\.program) == [nil, nil, "claude", nil, "python3", nil])
+    }
+
+    @Test func theListPutsWhatIsRunMostFirst() {
+        let catalog = Command.catalog(["reply", "sh", "calc"].map { CustomCommand(name: $0, type: .prompt, prompt: "x") })
+        let (c, _) = composer(key: .optionTap)
+        c.commands = catalog
+        // Running @calc counts it, and says so to the controller (which keeps it).
+        _ = c.handleKeyDown(at)
+        type("ca", c)
+        _ = c.handleKeyDown(tab)
+        type("nihao", c)
+        #expect(tapOption(c, at: 5).contains(.commandUsed("calc")))
+        #expect(c.commandUsage.score("calc") > 0)
+        // Next time "@" lists it first; the digit picks from what's shown.
+        let (d, _) = composer(key: .optionTap)
+        d.commands = catalog
+        d.commandUsage = c.commandUsage
+        _ = d.handleKeyDown(at)
+        #expect(d.paletteMatches.map(\.name) == ["calc", "improve", "question", "claude", "open"])
+        _ = d.handleKeyDown(k("1"))
+        #expect(d.draft == "@calc ")
+        // A command beyond the five is found by its letters.
+        let (e, _) = composer(key: .optionTap)
+        e.commands = catalog
+        _ = e.handleKeyDown(at)
+        type("s", e)
+        #expect(e.paletteMatches.map(\.name) == ["sh", "question"])  // names starting with s first
+        // Picking from the list doesn't count: only running does.
+        _ = e.handleKeyDown(tab)
+        #expect(e.commandUsage.score("sh") == 0)
     }
 
     @Test func claudeIsNotStartedWhileSecureInputIsOn() {

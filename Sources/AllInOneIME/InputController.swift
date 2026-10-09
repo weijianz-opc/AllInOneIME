@@ -25,6 +25,22 @@ enum Settings {
     }
 }
 
+/// How much each @ command is used (the order of the command list), shared by every text field and kept
+/// across launches.
+enum CommandUsageStore {
+    private static let key = "commandUsage"
+    static var usage: CommandUsage = {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let usage = try? JSONDecoder().decode(CommandUsage.self, from: data) else { return CommandUsage() }
+        return usage
+    }()
+
+    static func save(_ new: CommandUsage) {
+        usage = new
+        if let data = try? JSONEncoder().encode(new) { UserDefaults.standard.set(data, forKey: key) }
+    }
+}
+
 /// The config file as of now, re-read only when it changed (checked by modification date).
 /// A file that doesn't parse reads as the defaults here; conversions report the error.
 enum LiveConfig {
@@ -76,6 +92,9 @@ final class AllInOneIMEInputController: IMKInputController {
     var converter: Converter = sharedConverter
     /// Persists the sentence mode switch (the self-test replaces this so it leaves the setting alone).
     var saveSentenceMode: (Bool) -> Void = { Settings.sentenceMode = $0 }
+    /// The command usage as kept, and keeping it (the self-test leaves the user's alone).
+    var loadCommandUsage: () -> CommandUsage = { CommandUsageStore.usage }
+    var saveCommandUsage: (CommandUsage) -> Void = { CommandUsageStore.save($0) }
     /// Whether secure event input is on anywhere; no text is sent to the model then.
     /// (The self-test replaces this to exercise both states.)
     var secureInputActive: () -> Bool = { SecureInput.isOn }
@@ -291,7 +310,10 @@ final class AllInOneIMEInputController: IMKInputController {
         secureNoticeShown = false
         ensureEngine()
         // Commands added to the config apply from the next sentence on (the file is re-read only when it changed).
-        if !composer.isComposing { setCommands(Command.catalog(loadSettings().customCommands)) }
+        if !composer.isComposing {
+            setCommands(Command.catalog(loadSettings().customCommands))
+            composer.commandUsage = loadCommandUsage()  // another text field may have run commands
+        }
         let response = composer.handleKeyDown(KeyEvent(
             keyCode: event.keyCode, characters: event.characters ?? "",
             charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
@@ -380,6 +402,8 @@ final class AllInOneIMEInputController: IMKInputController {
                     log.error("@claude: could not start Terminal: \(String(describing: error), privacy: .public)")
                     showNotice(UIText.describe(error), client: target)
                 }
+            case .commandUsed:
+                saveCommandUsage(composer.commandUsage)
             case let .launchInTerminal(argv):
                 do {
                     try launchInTerminal(argv)
