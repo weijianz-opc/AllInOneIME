@@ -73,6 +73,9 @@ final class AIPinyinInputController: IMKInputController {
     /// Whether secure event input is on anywhere; no text is sent to the model then.
     /// (The self-test replaces this to exercise both states.)
     var secureInputActive: () -> Bool = { SecureInput.isOn }
+    /// Whether composing is off for a client because of secure input (the self-test replaces this:
+    /// macOS may attribute secure input to another app while it runs).
+    var blocksComposing: (IMKTextInput?) -> Bool = { SecureInput.blocksComposing($0) }
     /// Only set by the self-test: IMK refuses to create a controller for anything but its own
     /// client proxies, so the test injects its fake text field here.
     var clientOverride: IMKTextInput?
@@ -86,6 +89,13 @@ final class AIPinyinInputController: IMKInputController {
     private var voiceArmToken = 0
     /// Self-test only: recognize this audio file instead of the microphone.
     var voiceFile: (url: URL, speed: Double)?
+    /// The text ⌥Space read: the selected range, the part of it a chosen line replaces (without
+    /// surrounding whitespace), and that part's text. Checked again before replacing.
+    private var selectionTarget: (selected: NSRange, replace: NSRange, text: String)?
+    /// Whether marked text this controller set is in the document. Empty marked text is only sent
+    /// to clear it: with nothing marked, NSTextView puts (empty) marked text in place of the
+    /// selection, deleting the selected text.
+    private var hasMarkedText = false
     /// False in the self-test: the microphone (and its permission prompt) is never touched.
     static var microphoneAllowed = true
 
@@ -192,8 +202,20 @@ final class AIPinyinInputController: IMKInputController {
         // Password fields and prompts turn on secure event input. Never compose (so nothing can be
         // sent to the model) in the app that turned it on; anything already typed goes in as typed.
         let target: IMKTextInput? = client ?? clientOverride ?? self.client()
-        if SecureInput.blocksComposing(target) {
+        if blocksComposing(target) {
+            // Selected text being converted, if any: the key must not type over it when it is still selected.
+            let converting = composer.replacesSelection ? selectionTarget?.selected : nil
             if composer.isComposing { perform(composer.commitAsTyped(), client: client) }
+            // ⌥Space would type a no-break space over selected text. Only the range is checked:
+            // nothing is read (or sent) while secure input is on.
+            if let target, !Self.isTerminal(target), !event.modifierFlags.contains(.command) {
+                let range = target.selectedRange()
+                let selected = range.location != NSNotFound && range.length > 0
+                if selected && (Self.isSelectionKey(event) || range == converting) {
+                    perform([.notice("安全输入中：不改写选中的文字")], client: client)
+                    return true
+                }
+            }
             if !secureNoticeShown, let chars = event.characters, !chars.isEmpty,
                event.modifierFlags.isDisjoint(with: [.command, .control]) {
                 secureNoticeShown = true
@@ -203,17 +225,20 @@ final class AIPinyinInputController: IMKInputController {
         }
         secureNoticeShown = false
         ensureEngine()
+        // Holding ⌥Space must not pick a line by itself: the selected text would be replaced with a
+        // line the user may not even have seen.
+        if event.isARepeat, event.keyCode == VirtualKey.space, composer.replacesSelection { return true }
         let response = composer.handleKeyDown(KeyEvent(
             keyCode: event.keyCode, characters: event.characters ?? "",
             charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
-            modifiers: Self.modifiers(event.modifierFlags)))
+            modifiers: Self.modifiers(event.modifierFlags)), selection: { readSelection(target) })
         perform(response.effects, client: client)
         return response.handled
     }
 
     @MainActor
     func handleFlagsChanged(_ event: NSEvent, client: IMKTextInput?) {
-        guard !SecureInput.blocksComposing(client ?? clientOverride ?? self.client()) else {
+        guard !blocksComposing(client ?? clientOverride ?? self.client()) else {
             // A password field took over: stop any recording (its release may never arrive here).
             if composer.voice != .off { perform(composer.commitAsTyped(), client: client) }
             return
@@ -251,6 +276,70 @@ final class AIPinyinInputController: IMKInputController {
         NSEvent.modifierFlags.contains(.option) && NSEvent.pressedMouseButtons == 0
     }
 
+    // MARK: - Selected text
+
+    /// ⌥Space (Caps Lock aside): the key that sends selected text to the model.
+    static func isSelectionKey(_ event: NSEvent) -> Bool {
+        event.keyCode == VirtualKey.space && modifiers(event.modifierFlags).subtracting(.capsLock) == [.option]
+    }
+
+    /// Terminals don't replace ranges (the result would be typed at the prompt): ⌥Space is theirs.
+    static func isTerminal(_ client: IMKTextInput) -> Bool {
+        client.bundleIdentifier().map(SecureInput.terminals.contains) ?? false
+    }
+
+    /// What is selected in `client`, for ⌥Space. Only a selection the application hands over in
+    /// full is used: the chosen line replaces the whole range, so it must not hold text that wasn't
+    /// read (Chromium, for one, only keeps the text near the selection on the input method's side).
+    @MainActor
+    private func readSelection(_ client: IMKTextInput?) -> Composer.Selection {
+        selectionTarget = nil
+        guard let client, !Self.isTerminal(client) else { return .none }
+        let range = client.selectedRange()
+        guard range.location != NSNotFound, range.length > 0 else { return .none }
+        // Checked before reading (in UTF-16 units, generously), so a whole document isn't copied over.
+        guard range.length <= Composer.maxSelectionLength * 4 else { return .tooLong }
+        guard let text = Self.fullText(range, in: client), let trimmed = Composer.trimSelection(text) else {
+            return .unreadable
+        }
+        guard !trimmed.text.isEmpty else {
+            // Selected spaces: ⌥Space types a no-break space over them, as usual. A selected line
+            // break (an empty line, triple-clicked) is refused instead: the lines would run together.
+            return text.contains(where: \.isNewline) ? .text("") : .none
+        }
+        selectionTarget = (range, NSRange(location: range.location + trimmed.offset, length: trimmed.length), trimmed.text)
+        return .text(trimmed.text)
+    }
+
+    /// The text in `range`, if the application hands all of it over.
+    @MainActor
+    static func fullText(_ range: NSRange, in client: IMKTextInput) -> String? {
+        var actual = NSRange(location: NSNotFound, length: 0)
+        let text = client.string(from: range, actualRange: &actual) ?? client.attributedSubstring(from: range)?.string
+        guard let text, (text as NSString).length == range.length,
+              actual.location == NSNotFound || actual == range
+        else { return nil }
+        return text
+    }
+
+    /// Puts the chosen line in place of the text ⌥Space read, in one edit (one undo step; formatting
+    /// around it is kept). Only the text itself is replaced, not whitespace the selection had around
+    /// it: in web editors a selected paragraph break is part of the page structure, and replacing it
+    /// would merge or restyle blocks. (A field that ignores the replacement range, as Java's do,
+    /// replaces its whole selection, that whitespace included.) The document may have changed while
+    /// the panel was up (a click, ⌘X, …): then nothing is replaced.
+    @MainActor
+    private func replaceSelection(with text: String, client: IMKTextInput?) {
+        guard let target = selectionTarget, let client else { return }
+        selectionTarget = nil
+        guard client.selectedRange() == target.selected, Self.fullText(target.replace, in: client) == target.text else {
+            log.notice("selection changed before replacing it; left alone")
+            showNotice("选中的文字变了，没有替换", client: client)
+            return
+        }
+        client.insertText(text, replacementRange: target.replace)
+    }
+
     // MARK: - Effects
 
     @MainActor
@@ -262,6 +351,9 @@ final class AIPinyinInputController: IMKInputController {
                 updateMarkedText(target)
             case let .commit(text):
                 target?.insertText(text, replacementRange: Self.notFound)
+                hasMarkedText = false  // the inserted text took the marked text's place
+            case let .replaceSelection(text):
+                replaceSelection(with: text, client: target)
             case let .startConversion(input, id):
                 if secureInputActive() {
                     // A password field or prompt may be active somewhere: never send text off the Mac.
@@ -296,6 +388,8 @@ final class AIPinyinInputController: IMKInputController {
                 cancelVoiceSession(id: id)
             }
         }
+        // Keep a copy of the selected text only while it is being converted.
+        if !composer.replacesSelection { selectionTarget = nil }
     }
 
     // MARK: - Voice
@@ -401,7 +495,10 @@ final class AIPinyinInputController: IMKInputController {
         guard let client else { return }
         let text = composer.markedText
         guard !text.isEmpty else {
+            // Nothing of ours is marked: leave the document (and any selection in it) alone.
+            guard hasMarkedText else { return }
             client.setMarkedText("", selectionRange: NSRange(location: 0, length: 0), replacementRange: Self.notFound)
+            hasMarkedText = false
             return
         }
         let length = (text as NSString).length
@@ -411,6 +508,7 @@ final class AIPinyinInputController: IMKInputController {
         let cursor = String(text.prefix(composer.markedCursor)).utf16.count
         client.setMarkedText(
             attributed, selectionRange: NSRange(location: cursor, length: 0), replacementRange: Self.notFound)
+        hasMarkedText = true
     }
 
     private func markAttributes(style: Int, range: NSRange) -> [NSAttributedString.Key: Any] {
@@ -574,18 +672,21 @@ final class AIPinyinInputController: IMKInputController {
                 }
             }
             model.highlighted = composer.highlighted
+            // Selected text: ⏎ and Esc leave it as it is (there is no draft to return to).
+            let keep = composer.replacesSelection ? "⏎ / Esc 保留原文" : "⏎ 上屏原文 · Esc 返回"
             switch composer.phase {
             case .translating:
                 let polishing = Language.of(composer.draft) == config.outputLanguage
                 model.status = choices.count <= 1 ? .loading(polishing ? "AI 润色中…" : "AI 翻译中…") : .none
-                model.footer = "生成中… · ⏎ 上屏原文 · Esc 返回"
+                model.footer = "生成中… · \(keep)"
             case .choosing:
-                model.footer = "空格 上屏 · 数字选择 · ⏎ 原文 · Esc 返回"
+                model.footer = composer.replacesSelection
+                    ? "空格 替换 · 数字选择 · ⏎ / Esc 保留原文" : "空格 上屏 · 数字选择 · ⏎ 原文 · Esc 返回"
                 model.detail = lastFromCache ? "缓存" : lastElapsed.map { String(format: "%.1fs", $0) }
             case let .failed(message):
                 model.status = .error(message)
                 model.highlighted = nil  // Space retries; nothing is selected
-                model.footer = "空格 重试 · ⏎ 上屏原文 · Esc 返回"
+                model.footer = "空格 重试 · \(keep)"
             case .idle, .drafting:
                 break
             }
