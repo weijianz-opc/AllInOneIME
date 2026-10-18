@@ -107,6 +107,34 @@ struct CalculatorTests {
         ])
     }
 
+    @Test func remainder() {
+        // With the sign of the divisor, as on a calculator; `%` stays percent.
+        check([
+            ("mod(17, 5)", "2"), ("mod(-7, 3)", "2"), ("mod(7, -3)", "-2"), ("mod(-7, -3)", "-1"), ("mod(7, 3)", "1"),
+            ("mod(2, 5)", "2"), ("mod(-2, 5)", "3"), ("mod(0, 5)", "0"), ("mod(15, 5)", "0"), ("mod(-6, 3)", "0"),
+            ("mod(6, -3)", "0"), ("MOD(17, 5)", "2"), ("Mod(17, 5)", "2"), ("mod(17, 5)*3", "6"), ("-mod(7, 3)", "-1"),
+            ("mod(mod(100, 30), 7)", "3"), ("mod(17, 5)%", "0.02"), ("ｍｏｄ（１７，５）", "2"),
+        ])
+        // Exact decimals, like + - * /.
+        check([
+            ("mod(7.5, 2)", "1.5"), ("mod(-7.5, 2)", "0.5"), ("mod(7.5, -2)", "-0.5"), ("mod(0.3, 0.1)", "0"),
+            ("mod(0.7, 0.1)", "0"), ("mod(1, 0.1)", "0"), ("mod(-0.3, 0.1)", "0"), ("mod(1.1, 0.2)", "0.1"),
+            ("mod(10.25, 0.5)", "0.25"), ("mod(0.1+0.2, 0.3)", "0"),
+            ("mod(12345678901234567890123, 7)", "3"), ("mod(-12345678901234567890123, 7)", "4"),
+            ("mod(2^100, 7)", "2"), ("mod(10^36, 7)", "1"), ("mod(1e-20, 3)", "1e-20"), ("mod(-1e-20, 3)", "3"),
+        ])
+        // −5.00…0147 (39 digits) as a Decimal quotient is −5, a floor one too many: the rest is moved back by 0.68.
+        #expect(Calculator.Number.remainder(Decimal(string: "-3.40000000000000000000000000000000000001")!, Decimal(string: "0.68")!)
+            == Decimal(string: "0.67999999999999999999999999999999999999"))
+        #expect(Calculator.Number.remainder(Decimal(string: "-1e-20")!, 3) == Decimal(string: "2.99999999999999999999"))
+        // Doubles: what is left of them, without the noise of their rounding.
+        #expect(calc("mod(pi, 1)") == calc("pi-3"))
+        #expect(calc("mod(-pi, 1)") == calc("4-pi"))
+        #expect(calc("mod(pi, -1)") == calc("pi-4"))
+        #expect(calc("mod(10, pi)") == calc("10-3*pi"))
+        check([("mod(sqrt(2)^2, 2)", "0"), ("mod(3*pi, pi)", "0"), ("mod(2*pi, pi)", "0"), ("mod(sqrt(2)*3, sqrt(2))", "0")])
+    }
+
     @Test func noFloatNoise() {
         // Radians; what an inexact π leaves behind is taken out.
         check([
@@ -149,7 +177,10 @@ struct CalculatorTests {
             ("e2", .unknownName("e2")),
             ("pow(2)", .badArguments("pow")), ("sqrt(1, 2)", .badArguments("sqrt")), ("max()", .badArguments("max")),
             ("sqrt 4", .badArguments("sqrt")), ("Sqrt", .badArguments("Sqrt")), ("round(1, 0.5)", .badArguments("round")),
-            ("round(1, 2, 3)", .badArguments("round")),
+            ("round(1, 2, 3)", .badArguments("round")), ("mod(1)", .badArguments("mod")),
+            ("mod(1, 2, 3)", .badArguments("mod")), ("MOD(1)", .badArguments("MOD")), ("mod 17", .badArguments("mod")),
+            ("mod(5, 0)", .divisionByZero), ("mod(0, 0)", .divisionByZero), ("mod(5, 1-1)", .divisionByZero),
+            ("mod(pi, 0)", .divisionByZero), ("17 % 5", .unexpected("5")),
             ("sqrt(-1)", .notFinite), ("ln(0)", .notFinite), ("ln(-1)", .notFinite), ("log(0)", .notFinite),
             ("tan(pi/2)", .notFinite), ("10^400", .notFinite), ("1e400", .notFinite), ("exp(1000)", .notFinite),
             ("(-8)^(1/3)", .notFinite), ("9^9^9", .notFinite),
@@ -252,6 +283,7 @@ struct CalculatorTests {
         #expect(arguments("大约 @calculate （１＋２）×３，对吧") == ["（１＋２）×３"])
         #expect(arguments("@calculate sqrt(2)+1 左右") == ["sqrt(2)+1"])
         #expect(arguments("@calculate max(1, 2), then") == ["max(1, 2)"])
+        #expect(arguments("余数是 @calculate mod(17, 5) 个") == ["mod(17, 5)"])
         #expect(arguments("（总价 @calculate 23*17）") == ["23*17"])
         #expect(arguments("@calculate 5%的利润") == ["5%"])
         #expect(arguments("@calculate 1e3 m") == ["1e3"])

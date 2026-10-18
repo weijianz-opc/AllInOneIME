@@ -119,8 +119,9 @@ the message; without the Messages app it isn't offered.
 
 `@calculate` works on this Mac, offline: `+ - * /` (also `× ÷`), `^` or `**` for powers, parentheses, percent (`50%` is 0.5,
 `200*5%` is 10; as on a calculator, a percentage added or subtracted is of what comes before: `100+10%` is 110,
-`100-10%` is 90), the functions `sqrt abs round floor ceil ln log exp sin cos tan min max pow` (`log` is base 10, angles
-are radians, `round(x, 2)` keeps two decimals) and the constants `pi` (`π`) and `e`. Full-width digits and signs work too. Arithmetic is exact in decimal, so `0.1+0.2` is `0.3`; results have at most 15 significant digits, and
+`100-10%` is 90), the functions `sqrt abs round floor ceil ln log exp sin cos tan min max pow mod` (`log` is base 10, angles
+are radians, `round(x, 2)` keeps two decimals, `mod(a, b)` is the remainder with the sign of `b` as on a calculator:
+`mod(-7, 3)` is 2) and the constants `pi` (`π`) and `e`. Full-width digits and signs work too. Arithmetic is exact in decimal, so `0.1+0.2` is `0.3` and `mod(0.3, 0.1)` is `0`; results have at most 15 significant digits, and
 whole numbers of up to 38 digits are written out in full (`2^100` → `1267650600228229401496703205376`).
 
 ### On the selected text (new)

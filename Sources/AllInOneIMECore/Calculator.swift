@@ -9,13 +9,14 @@ import Foundation
 /// and before signs (`2^3^2` is 2^9, `-2^2` is −4, `2^-1` is 0.5); signs; parentheses; `%` after a
 /// value for percent (`50%` is 0.5, `200*5%` is 10; added or subtracted, a percentage is one of what
 /// comes before, as on a calculator: `100+10%` is 110, `100-10%` is 90); the functions `sqrt abs round
-/// floor ceil ln log exp sin cos tan min max pow` (`log` is base 10, angles are radians, `round(x, 2)`
-/// keeps two decimals) and the constants `pi` (`π`) and `e`, in any case. Full-width digits, signs and
-/// spaces from Chinese typing count as their ASCII forms (`（２＋３）×４`), and a `=` at the end is ignored.
+/// floor ceil ln log exp sin cos tan min max pow mod` (`log` is base 10, angles are radians, `round(x, 2)`
+/// keeps two decimals, `mod(a, b)` is the remainder with the sign of `b`: `mod(-7, 3)` is 2) and the
+/// constants `pi` (`π`) and `e`, in any case. Full-width digits, signs and spaces from Chinese typing
+/// count as their ASCII forms (`（２＋３）×４`), and a `=` at the end is ignored.
 ///
-/// `+ - * /`, `%` and whole powers are exact decimals (`Decimal`: `0.1+0.2` is `0.3`, `2^100` keeps
-/// all 31 digits); the functions and other powers use `Double`, and so does anything beyond what a
-/// `Decimal` holds. Results come without float noise or trailing zeros (`format`).
+/// `+ - * /`, `%`, `mod` and whole powers are exact decimals (`Decimal`: `0.1+0.2` is `0.3`, `2^100`
+/// keeps all 31 digits); the other functions and powers use `Double`, and so does anything beyond what
+/// a `Decimal` holds. Results come without float noise or trailing zeros (`format`).
 public enum Calculator {
     /// Longest expression worked out, in characters.
     public static let maxLength = 1000
@@ -163,7 +164,7 @@ public enum Calculator {
     }
 
     static let functions: Set<String> = ["sqrt", "abs", "round", "floor", "ceil", "ln", "log", "exp", "sin", "cos", "tan",
-                                         "min", "max", "pow"]
+                                         "min", "max", "pow", "mod"]
     static let constants: Set<String> = ["pi", "e"]
 
     /// Operators and punctuation, after `halfWidth` (`**` is a power too).
@@ -456,6 +457,9 @@ public enum Calculator {
         case "pow":
             guard arguments.count == 2 else { throw wrong }
             return try arguments[0].raised(to: arguments[1])
+        case "mod":
+            guard arguments.count == 2 else { throw wrong }
+            return try arguments[0].remainder(dividingBy: arguments[1])
         default:
             throw CalcError.unknownName(typed)
         }
@@ -654,6 +658,57 @@ extension Calculator.Number {
             return .decimal(exact)
         }
         return .double(try Calculator.finite(estimate))
+    }
+
+    /// What is left of `self` divided by `divisor`, with the divisor's sign, as on a calculator:
+    /// `mod(17, 5)` is 2, `mod(-7, 3)` is 2, `mod(7, -3)` is −2. Exact for decimals (`mod(0.3, 0.1)` is
+    /// 0) while Decimal holds every digit of it, otherwise on Doubles, where a rest within their rounding
+    /// error of 0 or of the divisor is 0 (`mod(sqrt(2)^2, 2)`).
+    func remainder(dividingBy divisor: Self) throws -> Self {
+        guard !divisor.isZero else { throw CalcError.divisionByZero }
+        if case let .decimal(x) = self, case let .decimal(y) = divisor, let exact = Self.remainder(x, y) {
+            return .decimal(exact)
+        }
+        let x = double
+        let y = divisor.double
+        var rest = x.truncatingRemainder(dividingBy: y)
+        if rest != 0, (rest < 0) != (y < 0) { rest += y }
+        let noise = max(abs(x), abs(y)) * 1e-15
+        return .double(abs(rest) < noise || abs(y) - abs(rest) < noise ? 0 : rest)
+    }
+
+    /// `x − y × floor(x / y)` in Decimal arithmetic, or nil where that can't be exact: a quotient with
+    /// more whole digits than Decimal keeps, or a product or difference that loses digits.
+    static func remainder(_ x: Decimal, _ y: Decimal) -> Decimal? {
+        let ratio = abs(Self.decimal(x).double / Self.decimal(y).double)
+        guard ratio < 1e37 else { return nil }
+        var a = x
+        var b = y
+        var whole = Decimal()  // x / y rounded down
+        if ratio < 1 {
+            // The signs say it, where a quotient that small could underflow.
+            whole = x.isZero || (x < 0) == (y < 0) ? 0 : -1
+        } else {
+            var quotient = Decimal()
+            let status = NSDecimalDivide(&quotient, &a, &b, .plain)
+            guard status == .noError || status == .lossOfPrecision, !quotient.isNaN else { return nil }
+            NSDecimalRound(&whole, &quotient, 0, .down)
+        }
+        var product = Decimal()
+        var rest = Decimal()
+        guard NSDecimalMultiply(&product, &b, &whole, .plain) == .noError,
+              NSDecimalSubtract(&rest, &a, &product, .plain) == .noError else { return nil }
+        // A quotient cut to the digits Decimal keeps (or the estimate next to 1) can put the floor one
+        // off, which leaves the rest one divisor out of place.
+        var moved = Decimal()
+        if !rest.isZero, (rest < 0) != (y < 0) {
+            guard NSDecimalAdd(&moved, &rest, &b, .plain) == .noError else { return nil }
+            rest = moved
+        } else if abs(rest) >= abs(y) {
+            guard NSDecimalSubtract(&moved, &rest, &b, .plain) == .noError else { return nil }
+            rest = moved
+        }
+        return rest.isZero || (rest < 0) == (y < 0) && abs(rest) < abs(y) ? rest : nil
     }
 
     /// `base` to the whole power `n` in Decimal arithmetic, or nil if that fails.

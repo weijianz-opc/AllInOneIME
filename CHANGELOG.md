@@ -2,6 +2,12 @@
 
 English | [中文](CHANGELOG.zh-CN.md)
 
+## 0.6.5 (unreleased)
+
+### Added
+
+- `@calculate`: `mod(a, b)` for the remainder, with the sign of `b` as on a calculator: `mod(17, 5)` is `2`, `mod(-7, 3)` is `2`, `mod(7, -3)` is `-2`. It is exact in decimal like `+ - * /` (`mod(0.3, 0.1)` is `0`, `mod(7.5, 2)` is `1.5`), and `mod(5, 0)` is a division by zero, as `5/0` is. `%` after a value is still percent.
+
 ## 0.6.4 (2026-10-16)
 
 ### Added
